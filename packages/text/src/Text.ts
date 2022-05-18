@@ -18,6 +18,13 @@ const defaultDestroyOptions: IDestroyOptions = {
     baseTexture: true,
 };
 
+interface ModernContext2D extends CanvasRenderingContext2D {
+   // for chrome less 94
+   textLetterSpacing?: number;
+   // for chrome greater 94
+   letterSpacing?: number;
+}
+
 /**
  * A Text Object will create a line or multiple lines of text.
  *
@@ -51,11 +58,17 @@ export class Text extends Sprite
      */
     public static nextLineHeightBehavior = false;
 
+    /**
+     * New rendering behavior for letter-spacing which uses Chrome's new native API. This will
+     * lead to more accurate letter-spacing results because it does not try to manually draw
+     * each character. However, this Chrome API is experimental and may not serve all cases yet.
+     */
+    public static experimentalLetterSpacing = false;
+
     /** The canvas element that everything is drawn to. */
     public canvas: HTMLCanvasElement;
-
     /** The canvas 2d context that everything is drawn with. */
-    public context: CanvasRenderingContext2D;
+    public context: ModernContext2D;
     public localStyleID: number;
     public dirty: boolean;
 
@@ -231,11 +244,13 @@ export class Text extends Sprite
 
                 const dropShadowColor = style.dropShadowColor;
                 const rgb = hex2rgb(typeof dropShadowColor === 'number' ? dropShadowColor : string2hex(dropShadowColor));
+                const dropShadowBlur = style.dropShadowBlur * this._resolution;
+                const dropShadowDistance = style.dropShadowDistance * this._resolution;
 
                 context.shadowColor = `rgba(${rgb[0] * 255},${rgb[1] * 255},${rgb[2] * 255},${style.dropShadowAlpha})`;
-                context.shadowBlur = style.dropShadowBlur;
-                context.shadowOffsetX = Math.cos(style.dropShadowAngle) * style.dropShadowDistance;
-                context.shadowOffsetY = (Math.sin(style.dropShadowAngle) * style.dropShadowDistance) + dsOffsetShadow;
+                context.shadowBlur = dropShadowBlur;
+                context.shadowOffsetX = Math.cos(style.dropShadowAngle) * dropShadowDistance;
+                context.shadowOffsetY = (Math.sin(style.dropShadowAngle) * dropShadowDistance) + dsOffsetShadow;
             }
             else
             {
@@ -315,8 +330,22 @@ export class Text extends Sprite
         // letterSpacing of 0 means normal
         const letterSpacing = style.letterSpacing;
 
-        if (letterSpacing === 0)
+        // Checking that we can use moddern canvas2D api
+        // https://developer.chrome.com/origintrials/#/view_trial/3585991203293757441
+        // note: this is unstable API, Chrome less 94 use a `textLetterSpacing`, newest use a letterSpacing
+        // eslint-disable-next-line max-len
+        const supportLetterSpacing = Text.experimentalLetterSpacing
+            && ('letterSpacing' in CanvasRenderingContext2D.prototype
+                || 'textLetterSpacing' in CanvasRenderingContext2D.prototype);
+
+        if (letterSpacing === 0 || supportLetterSpacing)
         {
+            if (supportLetterSpacing)
+            {
+                this.context.letterSpacing = letterSpacing;
+                this.context.textLetterSpacing = letterSpacing;
+            }
+
             if (isStroke)
             {
                 this.context.strokeText(text, x, y);
@@ -353,7 +382,13 @@ export class Text extends Sprite
             {
                 this.context.fillText(currentChar, currentPosition, y);
             }
-            currentWidth = this.context.measureText(text.substring(i + 1)).width;
+            let textStr = '';
+
+            for (let j = i + 1; j < stringArray.length; ++j)
+            {
+                textStr += stringArray[j];
+            }
+            currentWidth = this.context.measureText(textStr).width;
             currentPosition += previousWidth - currentWidth + letterSpacing;
             previousWidth = currentWidth;
         }
@@ -396,9 +431,6 @@ export class Text extends Sprite
 
         texture.updateUvs();
 
-        // Recursively updates transform of all objects from the root to this one
-        this._recursivePostUpdateTransform();
-
         this.dirty = false;
     }
 
@@ -420,6 +452,27 @@ export class Text extends Sprite
         super._render(renderer);
     }
 
+    /** Updates the transform on all children of this container for rendering. */
+    public updateTransform(): void
+    {
+        this.updateText(true);
+
+        super.updateTransform();
+    }
+
+    public getBounds(skipUpdate?: boolean, rect?: Rectangle): Rectangle
+    {
+        this.updateText(true);
+
+        if (this._textureID === -1)
+        {
+            // texture was updated: recalculate transforms
+            skipUpdate = false;
+        }
+
+        return super.getBounds(skipUpdate, rect);
+    }
+
     /**
      * Gets the local bounds of the text object.
      *
@@ -436,7 +489,6 @@ export class Text extends Sprite
     /** Calculates the bounds of the Text as a rectangle. The bounds calculation takes the worldTransform into account. */
     protected _calculateBounds(): void
     {
-        this.updateText(true);
         this.calculateVertices();
         // if we have already done this on THIS frame.
         this._bounds.addQuad(this.vertexData);
@@ -622,7 +674,7 @@ export class Text extends Sprite
             this.canvas.height = this.canvas.width = 0;
         }
 
-        // make sure to reset the the context and canvas.. dont want this hanging around in memory!
+        // make sure to reset the context and canvas.. dont want this hanging around in memory!
         this.context = null;
         this.canvas = null;
 

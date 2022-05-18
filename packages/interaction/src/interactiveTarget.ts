@@ -37,14 +37,14 @@ type Cursor = 'auto'
     | 'grab'
     | 'grabbing';
 
-interface IHitArea {
+export interface IHitArea {
     contains(x: number, y: number): boolean;
 }
 
 export interface InteractiveTarget {
     interactive: boolean;
     interactiveChildren: boolean;
-    hitArea: IHitArea;
+    hitArea: IHitArea | null;
     cursor: Cursor | string;
     buttonMode: boolean;
     trackedPointers: {[x: number]: InteractionTrackingData};
